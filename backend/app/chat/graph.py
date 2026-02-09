@@ -4,15 +4,16 @@ from typing import TypedDict, Literal, Any
 from sqlalchemy.orm import Session
 
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from crewai import Agent, Task, Crew
-import autogen
+from autogen_agentchat.agents import AssistantAgent
 
-from app.chat.tools import get_hours, get_location, search_menu, get_item
+from app.chat.tools import get_hours, get_location, search_menu
 from app.chat.memory import load_state, save_state
 from app.settings import settings
+
 
 class ChatState(TypedDict, total=False):
     user_id: int
@@ -22,8 +23,10 @@ class ChatState(TypedDict, total=False):
     messages: list[Any]
     response: str
 
+
 def _llm():
     return ChatOpenAI(model="gpt-4o-mini", api_key=settings.OPENAI_API_KEY)
+
 
 def classify_intent(state: ChatState) -> ChatState:
     llm = _llm()
@@ -37,8 +40,10 @@ def classify_intent(state: ChatState) -> ChatState:
     state["intent"] = label  # type: ignore
     return state
 
+
 def route(state: ChatState) -> str:
     return state.get("intent", "info")  # type: ignore
+
 
 def handle_info(state: ChatState) -> ChatState:
     llm = _llm()
@@ -48,9 +53,9 @@ def handle_info(state: ChatState) -> ChatState:
     state["response"] = out
     return state
 
+
 def handle_menu(state: ChatState, db: Session) -> ChatState:
     llm = _llm()
-    # Lightweight tool use via LLM instruction (kept deterministic)
     items = search_menu(db, query=state["input"])
     msg = (
         "You are a restaurant assistant. Use the following menu search results.\n"
@@ -61,8 +66,8 @@ def handle_menu(state: ChatState, db: Session) -> ChatState:
     state["response"] = out
     return state
 
+
 def handle_delivery_with_crewai(state: ChatState) -> ChatState:
-    # CrewAI can handle sales/upsell language; tools kept server-side in real implementation.
     sales_agent = Agent(
         role="Sales Agent",
         goal="Increase conversions while respecting user preferences.",
@@ -70,8 +75,10 @@ def handle_delivery_with_crewai(state: ChatState) -> ChatState:
         verbose=False,
     )
     task = Task(
-        description=f"User wants delivery/order help. Message: {state['input']}. "
-                    "Ask for missing details: address, items, customizations, payment instructions.",
+        description=(
+            f"User wants delivery/order help. Message: {state['input']}. "
+            "Ask for missing details: address, items, customizations, payment instructions."
+        ),
         expected_output="A clear, step-by-step message confirming cart and next questions.",
         agent=sales_agent,
     )
@@ -80,19 +87,24 @@ def handle_delivery_with_crewai(state: ChatState) -> ChatState:
     state["response"] = str(result)
     return state
 
+
 def handle_reservation_with_autogen(state: ChatState) -> ChatState:
-    # AutoGen for negotiation-style dialog; in production, wrap with strict tool calls.
-    assistant = autogen.AssistantAgent(
+    # Minimal AutoGen AgentChat usage (no Console, no legacy autogen.* imports)
+    agent = AssistantAgent(
         name="ReservationAgent",
-        llm_config={"model": "gpt-4o-mini", "api_key": settings.OPENAI_API_KEY},
-        system_message="You book restaurant tables. Ask for date, time, party size, name, phone (optional)."
+        system_message=(
+            "You book restaurant tables. Ask for date, time, party size, name, phone (optional). "
+            "Confirm details at the end."
+        ),
+        model="gpt-4o-mini",
+        api_key=settings.OPENAI_API_KEY,
     )
-    user = autogen.UserProxyAgent(name="User", human_input_mode="NEVER")
-    user.initiate_chat(assistant, message=state["input"])
-    # Take the last assistant message
-    last = assistant.chat_messages[user][-1]["content"]
-    state["response"] = last
+
+    # Keep it simple: one-turn response
+    reply = agent.run(state["input"])
+    state["response"] = str(reply)
     return state
+
 
 def build_graph(db: Session, user_id: int, conversation_id: int):
     graph = StateGraph(ChatState)
@@ -117,8 +129,8 @@ def build_graph(db: Session, user_id: int, conversation_id: int):
 
     return graph.compile()
 
+
 def run_chat_turn(db: Session, user_id: int, conversation_id: int, text: str) -> str:
-    # Per-user exclusive state in Redis
     state_cache = load_state(user_id, conversation_id)
     messages = state_cache.get("messages", [])
     messages.append({"role": "user", "content": text})
