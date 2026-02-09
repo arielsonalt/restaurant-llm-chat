@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: restaurant-config
+  namespace: restaurant
+data:
+  APP_NAME: restaurant-llm-chat
+  ENV: prod
+  JWT_ISSUER: restaurant-llm-chat
+  ACCESS_TOKEN_TTL_MIN: "15"
+  REFRESH_TOKEN_TTL_DAYS: "14"
+  LANGSMITH_PROJECT: restaurant-llm-chat
+  LANGCHAIN_TRACING_V2: "true"
+  LANGCHAIN_PROJECT: restaurant-llm-chat
